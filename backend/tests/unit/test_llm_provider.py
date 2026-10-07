@@ -72,3 +72,30 @@ def test_build_provider_fake():
 def test_build_provider_unknown():
     with pytest.raises(RuntimeError, match="LLM_PROVIDER"):
         build_provider(Settings(llm_provider="nope"))
+
+
+@pytest.mark.parametrize("method", ["chat_json", "chat_text", "embed"])
+@pytest.mark.parametrize("code", ["credit_balance_exhausted", "insufficient_quota", "rate_limit_exceeded"])
+async def test_openai_distinguishes_exhausted_credits_from_rate_limits(method, code):
+    import httpx
+    from openai import AsyncOpenAI
+
+    from app.llm.openai_provider import OpenAIProvider
+    from app.llm.provider import LLMQuotaError
+
+    def respond(request):
+        return httpx.Response(429, json={"error": {"code": code, "type": code, "message": "test failure"}})
+
+    provider = OpenAIProvider(Settings(openai_api_key="test-only"))
+    await provider.client.close()
+    async with AsyncOpenAI(
+        api_key="test-only", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        provider.client = client
+        kwargs = {"texts": ["hello"]} if method == "embed" else {"purpose": "test", "system": "", "user": "hello"}
+        if method == "chat_json":
+            kwargs["schema"] = {"type": "object"}
+        with pytest.raises(LLMError) as caught:
+            await getattr(provider, method)(**kwargs)
+        assert isinstance(caught.value, LLMQuotaError) == (code != "rate_limit_exceeded")

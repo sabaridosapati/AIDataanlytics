@@ -14,7 +14,7 @@ from app.api.ratelimit import limiter
 from app.cache.redis_cache import answer_key
 from app.db.models import QueryAudit, User
 from app.db.versions import get_catalog_version
-from app.llm.provider import LLMError
+from app.llm.provider import LLMError, LLMQuotaError
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/query", tags=["query"])
@@ -86,6 +86,9 @@ async def query(request: Request, body: QueryIn, user: User = Depends(current_us
     except PlanValidationError as exc:
         status, error = "plan_failed", str(exc)
         raise api_error(422, "plan_failed", "I couldn't turn this question into a valid analysis plan. Try rephrasing it.")
+    except LLMQuotaError as exc:
+        status, error = "llm_quota_exhausted", str(exc)
+        raise api_error(503, status, "The AI provider's API credits or quota are exhausted. Ask the administrator to check OpenAI API billing and project limits.")
     except LLMError as exc:
         status, error = "llm_unavailable", str(exc)
         raise api_error(502, "llm_unavailable", "The language model is unavailable right now. Please try again shortly.")

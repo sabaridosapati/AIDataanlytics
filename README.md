@@ -42,7 +42,7 @@ docker compose up --build -d
 Open **http://localhost:3000** and sign in with:
 
 - Username: `admin`
-- Password: `Test@123`
+- Password: `useyourpwd`
 
 Change this password before exposing the app anywhere.
 

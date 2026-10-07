@@ -2,7 +2,18 @@ import json
 
 from openai import AsyncOpenAI
 
-from app.llm.provider import LLMError
+from app.llm.provider import LLMError, LLMQuotaError
+
+
+def _request_error(exc: Exception, operation: str = "request") -> LLMError:
+    body = getattr(exc, "body", None)
+    details = body.get("error", body) if isinstance(body, dict) else {}
+    if isinstance(details, dict) and (
+        details.get("code") in ("insufficient_quota", "credit_balance_exhausted")
+        or details.get("type") == "insufficient_quota"
+    ):
+        return LLMQuotaError("OpenAI API credits or quota are exhausted. Ask the administrator to check API billing and project limits.")
+    return LLMError(f"OpenAI {operation} failed: {exc}")
 
 
 class OpenAIProvider:
@@ -30,7 +41,7 @@ class OpenAIProvider:
                 },
             )
         except Exception as exc:  # noqa: BLE001
-            raise LLMError(f"OpenAI request failed: {exc}") from exc
+            raise _request_error(exc) from exc
         message = resp.choices[0].message
         if getattr(message, "refusal", None):
             raise LLMError(f"The model refused: {message.refusal}")
@@ -48,7 +59,7 @@ class OpenAIProvider:
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             )
         except Exception as exc:  # noqa: BLE001
-            raise LLMError(f"OpenAI request failed: {exc}") from exc
+            raise _request_error(exc) from exc
         return (resp.choices[0].message.content or "").strip()
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -58,5 +69,5 @@ class OpenAIProvider:
                 resp = await self.client.embeddings.create(model=self.embed_model, input=texts[i : i + 100])
                 out.extend(d.embedding for d in resp.data)
         except Exception as exc:  # noqa: BLE001
-            raise LLMError(f"OpenAI embedding request failed: {exc}") from exc
+            raise _request_error(exc, "embedding request") from exc
         return out

@@ -5,6 +5,10 @@ class LLMError(Exception):
     """The language model could not produce a usable response."""
 
 
+class LLMQuotaError(LLMError):
+    """The provider's API credits or spending quota are exhausted."""
+
+
 class LLMProvider(Protocol):
     async def chat_json(self, *, purpose: str, system: str, user: str, schema: dict, model: str | None = None) -> dict: ...
 

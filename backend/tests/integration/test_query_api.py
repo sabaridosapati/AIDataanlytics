@@ -7,7 +7,7 @@ from app.catalog import load_catalog
 from app.db.models import Dataset, QueryAudit
 from app.llm.demo_script import DEMO_QUESTIONS
 from app.llm.fake_provider import Rule
-from app.llm.provider import LLMError
+from app.llm.provider import LLMError, LLMQuotaError
 from helpers import auth, register_verified_user, upload_and_wait
 
 
@@ -115,6 +115,21 @@ async def test_llm_outage_returns_502(client, admin_token, loaded):
     client.app.state.llm.rules[:0] = [Rule("intent", "outage", boom)]
     r = await ask(client, admin_token, "trigger an outage please")
     assert r.status_code == 502 and r.json()["error"]["code"] == "llm_unavailable"
+
+
+async def test_exhausted_api_credits_returns_actionable_error(client, admin_token, loaded):
+    def boom(user):
+        raise LLMQuotaError("API credits exhausted")
+
+    client.app.state.llm.rules[:0] = [Rule("intent", "quota", boom)]
+    r = await ask(client, admin_token, "trigger quota failure")
+    assert r.status_code == 503
+    assert r.json()["error"]["code"] == "llm_quota_exhausted"
+    assert "billing" in r.json()["error"]["message"]
+    assert "try again shortly" not in r.json()["error"]["message"]
+    async with client.app.state.sessionmaker() as s:
+        row = (await s.scalars(select(QueryAudit))).one()
+        assert row.status == "llm_quota_exhausted"
 
 
 async def test_invalid_plan_returns_422(client, admin_token, loaded):
