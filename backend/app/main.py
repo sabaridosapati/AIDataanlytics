@@ -12,7 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, datasets
+from app.api import admin, auth, dashboard, datasets, query
 from app.api.errors import http_exception_handler, unhandled_exception_handler, validation_exception_handler
 from app.api.ratelimit import limiter, rate_limit_handler
 from app.cache.redis_cache import RedisCache
@@ -23,7 +23,7 @@ from app.llm.provider import build_provider
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-ROUTERS = [auth.router, datasets.router]
+ROUTERS = [auth.router, datasets.router, query.router, dashboard.router, admin.router]
 
 
 @asynccontextmanager
