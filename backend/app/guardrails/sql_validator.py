@@ -7,6 +7,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError, SqlglotError
 from sqlglot.optimizer.qualify import qualify
+from sqlglot.optimizer.scope import traverse_scope
 
 ALLOWED_SCHEMA = "data"
 DENY_FUNC_PREFIXES = ("pg_", "dblink", "lo_")
@@ -31,8 +32,28 @@ class SQLValidationError(ValueError):
 
 def _function_name(func: exp.Func) -> str:
     if isinstance(func, exp.Anonymous):
-        return str(func.this).lower()
+        # `.name` is the unquoted text, so "pg_sleep"(1) is caught like pg_sleep(1)
+        return func.name.strip('"').lower()
     return func.sql_name().lower()
+
+
+def _cte_references(tree: exp.Expression) -> set[int]:
+    """ids of Table nodes that refer to a CTE visible in their *own* scope.
+
+    A CTE name only shadows tables inside the scope that defines it; a name match
+    elsewhere must still be treated as a real table (otherwise it resolves to pg_catalog).
+    """
+    try:
+        scopes = traverse_scope(tree)
+    except SqlglotError as exc:
+        raise SQLValidationError(f"SQL could not be analyzed: {exc}") from exc
+    refs: set[int] = set()
+    for scope in scopes:
+        visible = {name.lower() for name in scope.cte_sources}
+        for table in scope.tables:
+            if not table.db and (table.name or "").lower() in visible:
+                refs.add(id(table))
+    return refs
 
 
 def validate_sql(sql: str, schema: dict[str, dict[str, str]], max_rows: int) -> str:
@@ -55,13 +76,17 @@ def validate_sql(sql: str, schema: dict[str, dict[str, str]], max_rows: int) -> 
         if name.startswith(DENY_FUNC_PREFIXES) or name in DENY_FUNCS:
             raise SQLValidationError(f"Function '{name}' is not allowed.")
 
-    cte_names = {cte.alias_or_name.lower() for cte in tree.find_all(exp.CTE)}
+    for cte in tree.find_all(exp.CTE):
+        cte_name = cte.alias_or_name.lower()
+        if cte_name.startswith("pg_") or cte_name == "information_schema":
+            raise SQLValidationError(f"CTE name '{cte_name}' is not allowed (it shadows a system relation).")
+    cte_refs = _cte_references(tree)
     for table in tree.find_all(exp.Table):
         name = (table.name or "").lower()
         db = (table.db or "").lower()
         if table.args.get("catalog"):
             raise SQLValidationError("Cross-database references are not allowed.")
-        if not db and name in cte_names:
+        if id(table) in cte_refs:
             continue
         if db and db != ALLOWED_SCHEMA:
             raise SQLValidationError(f"Access to schema '{db}' is not allowed. Use tables in schema 'data' only.")

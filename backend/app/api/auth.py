@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import current_user, get_session
 from app.api.errors import api_error
 from app.api.ratelimit import limiter
-from app.auth.email_codes import CooldownError, VerifyResult, check_code, issue_code
+from app.auth.email_codes import CooldownError, VerifyResult, check_code, has_live_code, issue_code
 from app.auth.mailer import MailError
 from app.auth.security import create_access_token, hash_password, password_problem, verify_password
 from app.db.models import User
@@ -70,7 +70,9 @@ async def register(request: Request, body: RegisterIn, session: AsyncSession = D
     if user is None:
         user = User(email=email, password_hash=hash_password(body.password), role="user", is_verified=False)
         session.add(user)
-    else:
+    elif not await has_live_code(session, user):
+        # Only replace a pending account's password once its code has expired; otherwise
+        # anyone could swap the password of an address whose owner is about to verify it.
         user.password_hash = hash_password(body.password)
     await session.commit()
     try:

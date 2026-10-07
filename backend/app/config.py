@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
     max_sql_rows: int = 5000
     step_timeout_s: int = 30
+    query_timeout_s: float = 150  # must stay below nginx proxy_read_timeout (180 s)
+    openai_timeout_s: float = 20
     cache_ttl_s: int = 3600
     rate_limit_enabled: bool = True
     cors_origins: str = "http://localhost:3000,http://localhost:5173"

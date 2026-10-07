@@ -31,6 +31,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def has_live_code(session: AsyncSession, user: User) -> bool:
+    record = await session.scalar(select(EmailCode).where(EmailCode.user_id == user.id))
+    return record is not None and _now() <= record.expires_at and record.attempts < MAX_ATTEMPTS
+
+
 async def issue_code(session: AsyncSession, user: User, settings) -> None:
     """Create/replace the user's code and email it. Commits only if the email was sent."""
     now = _now()

@@ -1,3 +1,4 @@
+import asyncio
 import math
 import re
 
@@ -134,7 +135,7 @@ async def create_and_load_table(conn: AsyncConnection, table: str, df: pd.DataFr
     """
     columns_sql = ", ".join(f'"{c}" {types[c]}' for c in df.columns)
     await conn.execute(text(f'CREATE TABLE data."{table}" ({columns_sql})'))
-    records = to_records(df, types)
+    records = await asyncio.to_thread(to_records, df, types)
     raw = await conn.get_raw_connection()
     await raw.driver_connection.copy_records_to_table(
         table, records=records, columns=list(df.columns), schema_name="data"

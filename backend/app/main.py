@@ -19,6 +19,7 @@ from app.cache.redis_cache import RedisCache
 from app.config import get_settings
 from app.db.seed import seed_admin
 from app.db.session import create_engine_and_sessionmaker, init_db, wait_for_db
+from app.ingestion.pipeline import recover_interrupted
 from app.llm.provider import build_provider
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
     await wait_for_db(engine)
     await init_db(engine)
     await seed_admin(sessionmaker, settings)
+    await recover_interrupted(sessionmaker)
     app.state.engine = engine
     app.state.sessionmaker = sessionmaker
     app.state.ro_pool = await asyncpg.create_pool(settings.query_ro_url, min_size=1, max_size=5)

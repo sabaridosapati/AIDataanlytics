@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import uuid
@@ -74,7 +75,8 @@ async def query(request: Request, body: QueryIn, user: User = Depends(current_us
         if key and (cached := await state.cache.get_json(key)) is not None:
             resp, cache_hit = cached, True
         else:
-            resp = await answer_question(state, question, history)
+            # Overall deadline below nginx's 180 s proxy timeout, so clients always get a JSON error
+            resp = await asyncio.wait_for(answer_question(state, question, history), timeout=state.settings.query_timeout_s)
             if not resp.get("answerable"):
                 status = "unanswerable"
             elif any(s["status"] != "ok" for s in resp["steps"]):
@@ -87,6 +89,9 @@ async def query(request: Request, body: QueryIn, user: User = Depends(current_us
     except LLMError as exc:
         status, error = "llm_unavailable", str(exc)
         raise api_error(502, "llm_unavailable", "The language model is unavailable right now. Please try again shortly.")
+    except asyncio.TimeoutError:
+        status, error = "timeout", f"exceeded {state.settings.query_timeout_s}s"
+        raise api_error(504, "query_timeout", "This question took too long to answer. Try a narrower question or retry shortly.")
     finally:
         latency = int((time.perf_counter() - started) * 1000)
         await _audit(state, user.id, question, resp, status, error, latency, cache_hit)

@@ -2,9 +2,10 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 
 from app.db.models import Dataset, DatasetColumn
 from app.db.versions import bump_catalog_version
@@ -100,10 +101,15 @@ async def _describe_columns(state, hint: str, df: pd.DataFrame, types: dict[str,
         return {}
 
 
-async def _store_table(state, reuse_id: int | None, parent_id: int, original_name: str, table: ParsedTable) -> None:
-    df = table.df.copy()
+def _prepare_table(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+    df = df.copy()
     df.columns = clean_column_names(df.columns)
-    df, types = infer_types(df)
+    return infer_types(df)
+
+
+async def _store_table(state, reuse_id: int | None, parent_id: int, original_name: str, table: ParsedTable) -> None:
+    # CPU-heavy pandas work runs in a thread so large uploads don't freeze the API
+    df, types = await asyncio.to_thread(_prepare_table, table.df)
     descriptions = await _describe_columns(state, table.name_hint, df, types)
     async with state.sessionmaker() as s:
         slug = await unique_slug(s, table.name_hint)
@@ -126,6 +132,7 @@ async def _store_table(state, reuse_id: int | None, parent_id: int, original_nam
                 )
             )
         ds.status, ds.error = "ready", None
+        await bump_catalog_version(s)  # each committed part becomes visible immediately
         await s.commit()
 
 
@@ -161,6 +168,7 @@ async def _store_document(
         )
         ds.chunk_count = len(chunks)
         ds.status, ds.error = "ready", None
+        await bump_catalog_version(s)
         await s.commit()
 
 
@@ -171,9 +179,44 @@ async def _store(state, dataset_id: int, original_name: str, result: ParseResult
         reuse = None
     if result.segments:
         await _store_document(state, reuse, dataset_id, original_name, result.segments)
+
+
+async def _record_failure(state, dataset_id: int, message: str) -> None:
+    """Mark the upload failed — or, if an earlier part already loaded, add a failed part row."""
     async with state.sessionmaker() as s:
-        await bump_catalog_version(s)
+        ds = await s.get(Dataset, dataset_id)
+        if ds is None:
+            return
+        if ds.status == "ready":
+            s.add(
+                Dataset(
+                    name=f"{ds.source_filename} (part failed)",
+                    slug=f"failed_{uuid4().hex[:16]}",
+                    kind="pending",
+                    source_filename=ds.source_filename,
+                    file_type=ds.file_type,
+                    stored_path=ds.stored_path,
+                    uploaded_by=ds.uploaded_by,
+                    parent_upload_id=ds.id,
+                    status="failed",
+                    error=message,
+                )
+            )
+        else:
+            ds.status, ds.error = "failed", message
         await s.commit()
+
+
+async def recover_interrupted(sessionmaker) -> int:
+    """At startup: uploads left pending/processing by a restart can never finish — mark them failed."""
+    async with sessionmaker() as s:
+        result = await s.execute(
+            update(Dataset)
+            .where(Dataset.status.in_(("pending", "processing")))
+            .values(status="failed", error="Processing was interrupted by a server restart. Please upload the file again.")
+        )
+        await s.commit()
+        return result.rowcount or 0
 
 
 async def process_upload(state, dataset_id: int, path: Path, original_name: str) -> None:
@@ -189,4 +232,4 @@ async def process_upload(state, dataset_id: int, path: Path, original_name: str)
                 message = str(exc)
             else:
                 message = f"Processing failed: {type(exc).__name__}: {exc}"
-            await _set_status(state, dataset_id, "failed", message[:1000])
+            await _record_failure(state, dataset_id, message[:1000])

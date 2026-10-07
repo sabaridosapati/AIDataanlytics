@@ -7,7 +7,8 @@ from app.llm.provider import LLMError
 
 class OpenAIProvider:
     def __init__(self, settings):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=2, timeout=60)
+        # Short per-call timeout: steps have a 30 s budget and the whole query 150 s.
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=1, timeout=settings.openai_timeout_s)
         self.chat_model = settings.openai_chat_model
         self.embed_model = settings.openai_embed_model
         self.temperature = settings.openai_temperature
