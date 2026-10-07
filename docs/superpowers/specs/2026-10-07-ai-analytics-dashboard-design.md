@@ -299,3 +299,14 @@ The generator also writes `expected_answers.json` (ground-truth aggregates compu
 - Agent step failures surface in the answer as "partial result: <step> failed because <reason>".
 - OpenAI errors (rate limit / timeout): 2 retries with exponential backoff, then a user-facing error.
 - Structured JSON logging; every query gets a `request_id` written to the audit log.
+
+---
+
+## 12. Implementation notes (deviations decided during planning)
+
+1. Schema creation uses SQLAlchemy `create_all` at startup instead of Alembic (add Alembic before production schema changes).
+2. The backend connects as the Postgres owner role ("app_rw" in §3.2); `query_ro` is exactly as specified.
+3. File types are detected from magic-byte signatures + extension (no libmagic).
+4. Chunking is character-based (~3200 chars ≈ 800 tokens, 400 overlap) to avoid tiktoken's runtime download.
+5. Ingestion is serialized with one asyncio lock (avoids slug races; adequate for local use).
+6. Demo mode: `LLM_PROVIDER=fake` answers five scripted sample questions for free.
