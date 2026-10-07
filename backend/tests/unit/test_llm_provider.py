@@ -1,0 +1,74 @@
+import math
+
+import pytest
+
+from app.config import Settings
+from app.llm.fake_provider import FakeLLMProvider, Rule, fake_embed
+from app.llm.provider import LLMError, build_provider
+
+
+def cos(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+async def test_rule_matching_first_wins_and_uses_question_marker():
+    llm = FakeLLMProvider(rules=[Rule("intent", "revenue", {"a": 1}), Rule("intent", "", {"a": 2})])
+    assert await llm.chat_json(purpose="intent", system="", user="Catalog...\nUser question: Total REVENUE?", schema={}) == {"a": 1}
+    # 'revenue' appears only in the catalog part, not the question -> falls through
+    assert await llm.chat_json(purpose="intent", system="", user="revenue (double)\nUser question: hello", schema={}) == {"a": 2}
+
+
+async def test_callable_response_gets_full_message():
+    llm = FakeLLMProvider(rules=[Rule("aggregate", "", lambda user: user.upper())])
+    assert await llm.chat_text(purpose="aggregate", system="", user="User question: abc") == "USER QUESTION: ABC"
+
+
+async def test_missing_rule_raises():
+    with pytest.raises(LLMError):
+        await FakeLLMProvider().chat_json(purpose="sql", system="", user="x", schema={})
+
+
+async def test_describe_columns_has_default():
+    assert await FakeLLMProvider().chat_json(purpose="describe_columns", system="", user="x", schema={}) == {"descriptions": []}
+
+
+async def test_responses_are_copies():
+    rule = Rule("intent", "", {"steps": [1]})
+    llm = FakeLLMProvider(rules=[rule])
+    out = await llm.chat_json(purpose="intent", system="", user="q", schema={})
+    out["steps"].append(2)
+    assert rule.response == {"steps": [1]}
+
+
+async def test_calls_recorded():
+    llm = FakeLLMProvider(rules=[Rule("x", "", "ok")])
+    await llm.chat_text(purpose="x", system="", user="hello")
+    assert llm.calls == [("x", "hello")]
+
+
+async def test_fake_embeddings_deterministic_and_semantic():
+    llm = FakeLLMProvider(dim=1536)
+    a, b, c = await llm.embed(["supply chain disruption", "supply chain issues", "employee salary"])
+    assert len(a) == 1536
+    assert math.isclose(sum(x * x for x in a), 1.0, rel_tol=1e-6)
+    assert cos(a, b) > cos(a, c)
+    assert fake_embed("supply chain disruption", 1536) == a
+
+
+def test_fake_embed_empty_text_is_not_zero_vector():
+    v = fake_embed("", 8)
+    assert math.isclose(sum(x * x for x in v), 1.0)
+
+
+def test_build_provider_requires_key():
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        build_provider(Settings(llm_provider="openai", openai_api_key=""))
+
+
+def test_build_provider_fake():
+    assert isinstance(build_provider(Settings(llm_provider="fake")), FakeLLMProvider)
+
+
+def test_build_provider_unknown():
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER"):
+        build_provider(Settings(llm_provider="nope"))
