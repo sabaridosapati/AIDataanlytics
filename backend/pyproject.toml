@@ -7,4 +7,4 @@ addopts = "-m 'not live' --import-mode=importlib -p no:cacheprovider"
 markers = [
   "live: calls the real OpenAI API (costs money; excluded by default)",
 ]
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::jwt.warnings.InsecureKeyLengthWarning"]
